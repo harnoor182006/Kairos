@@ -187,6 +187,10 @@ def _download_video(
                 str(video_work),
                 "--verify-ssl",
                 "--no-md5-progress",
+                "--chunk-size",
+                "262144",
+                "--max-retries",
+                "10",
             ]
         else:
             command = [
@@ -263,6 +267,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-free-gb", type=float, default=12.0)
     parser.add_argument("--team-id", default=os.environ.get("TEAM_ID_STR", "TEAM_ID"))
     parser.add_argument("--keep-videos", action="store_true")
+    prefetch_group = parser.add_mutually_exclusive_group()
+    prefetch_group.add_argument(
+        "--prefetch",
+        dest="prefetch",
+        action="store_true",
+        help="Download one next source while inference runs (default).",
+    )
+    prefetch_group.add_argument(
+        "--no-prefetch",
+        dest="prefetch",
+        action="store_false",
+        help="Disable overlap between downloading and inference.",
+    )
+    parser.set_defaults(prefetch=True)
     args = parser.parse_args(argv)
 
     if not args.manifest.is_file():
@@ -310,6 +328,14 @@ def main(argv: list[str] | None = None) -> int:
     processed = 0
     download_pool = ThreadPoolExecutor(max_workers=1)
     prefetch_task: tuple[str, Future[Path]] | None = None
+    print(
+        "Prefetch: "
+        + (
+            f"enabled (one next source; reserve {args.min_free_gb:.1f} GB)"
+            if args.prefetch
+            else "disabled"
+        )
+    )
 
     for index, (video_id, duration, dataset) in enumerate(entries, start=1):
         output_path = output_dir / f"{video_id}.json"
@@ -355,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
                     video_id, dataset, video_work, epic_downloader
                 )
 
-            if not args.keep_videos and prefetch_task is None:
+            if args.prefetch and not args.keep_videos and prefetch_task is None:
                 prefetch_free_gb = shutil.disk_usage(work_dir).free / GIB
                 if prefetch_free_gb >= args.min_free_gb + 8:
                     for next_id, next_duration, next_dataset in entries[index:]:
